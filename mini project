@@ -1,1 +1,137 @@
+# netflix_analysis.R
+# Minimal Netflix mini-project (copy-paste and run)
+# Put netflix_titles.csv in the same folder as this script.
 
+# 0. --- install / load helper ----
+packages <- c("tidyverse", "lubridate", "janitor")
+installed <- packages %in% rownames(installed.packages())
+if (any(!installed)) {
+  install.packages(packages[!installed], repos = "https://cloud.r-project.org")
+}
+library(tidyverse)
+library(lubridate)
+library(janitor)
+
+# 1. --- find the CSV file (assumes netflix_titles.csv in working dir) ---
+csv_name <- "netflix_titles.csv"
+if (!file.exists(csv_name)) {
+  stop(paste0("Cannot find '", csv_name, "' in the working directory: ", getwd(),
+              "\nPut netflix_titles.csv in this folder (or give full path)."))
+}
+
+# 2. --- load data ---
+df <- read_csv(csv_name, show_col_types = FALSE) %>% clean_names()
+glimpse(df)
+
+# 3. --- quick missing-value summary (print) ---
+missing_summary <- df %>% summarise_all(~ sum(is.na(.)))
+print("Missing values per column (top):")
+print(missing_summary %>% pivot_longer(everything(), names_to="col", values_to="missing") %>% arrange(desc(missing)) %>% head(20))
+
+# 4. --- Movies vs TV Shows (count + bar) ---
+type_counts <- df %>% count(type, name = "n")
+print(type_counts)
+
+p1 <- type_counts %>%
+  ggplot(aes(x = type, y = n, fill = type)) +
+  geom_col() +
+  labs(title = "Movies vs TV Shows on Netflix", x = NULL, y = "Count") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggsave("plot_movies_vs_tv.png", p1, width = 6, height = 4, dpi = 150)
+
+# 5. --- Top genres (split listed_in) ---
+genres <- df %>%
+  filter(!is.na(listed_in)) %>%
+  mutate(listed_in = str_split(listed_in, ",")) %>%
+  unnest(listed_in) %>%
+  mutate(listed_in = str_trim(listed_in))
+
+top_genres <- genres %>% count(listed_in, name = "count") %>% arrange(desc(count))
+print(head(top_genres, 12))
+
+p2 <- top_genres %>%
+  slice_head(n = 12) %>%
+  ggplot(aes(x = reorder(listed_in, count), y = count)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top 12 Genres", x = NULL, y = "Count") +
+  theme_minimal()
+
+ggsave("plot_top_genres.png", p2, width = 7, height = 5, dpi = 150)
+
+# 6. --- Titles added per year (date_added -> year) ---
+df2 <- df %>%
+  mutate(date_added2 = mdy(date_added),
+         year_added = year(date_added2))
+
+year_counts <- df2 %>% filter(!is.na(year_added)) %>% count(year_added, name = "n") %>% arrange(year_added)
+print(head(year_counts, 20))
+
+p3 <- year_counts %>%
+  ggplot(aes(x = year_added, y = n)) +
+  geom_line() + geom_point() +
+  labs(title = "Titles Added Per Year", x = "Year", y = "Count") +
+  theme_minimal()
+
+ggsave("plot_titles_per_year.png", p3, width = 7, height = 4, dpi = 150)
+
+# 7. --- Top countries (split country) ---
+top_countries <- df %>%
+  mutate(country = if_else(is.na(country), "Unknown", country),
+         country = str_split(country, ",")) %>%
+  unnest(country) %>%
+  mutate(country = str_trim(country)) %>%
+  count(country, name = "count") %>%
+  arrange(desc(count)) %>%
+  slice_head(n = 12)
+
+print(top_countries)
+
+p4 <- top_countries %>%
+  ggplot(aes(x = reorder(country, count), y = count)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top Countries (by # titles)", x = NULL, y = "Count") +
+  theme_minimal()
+
+ggsave("plot_top_countries.png", p4, width = 7, height = 5, dpi = 150)
+
+# 8. --- Duration distribution for movies (minutes) ---
+get_minutes <- function(x) {
+  if (is.na(x)) return(NA_real_)
+  if (str_detect(x, "min")) {
+    as.numeric(str_extract(x, "\\d+"))
+  } else {
+    NA_real_
+  }
+}
+df3 <- df %>% mutate(duration_minutes = map_dbl(duration, get_minutes))
+
+p5 <- df3 %>%
+  filter(!is.na(duration_minutes)) %>%
+  ggplot(aes(x = duration_minutes)) +
+  geom_histogram(bins = 30) +
+  labs(title = "Distribution of Movie Durations (minutes)", x = "Minutes", y = "Count") +
+  theme_minimal()
+
+ggsave("hist_movie_durations.png", p5, width = 7, height = 4, dpi = 150)
+
+# 9. --- example filter (Thriller since 2016) ---
+thrillers_recent <- df2 %>%
+  filter(str_detect(listed_in, regex("Thriller", ignore_case = TRUE)),
+         !is.na(year_added), year_added >= 2016) %>%
+  select(title, country, release_year, year_added, type) %>%
+  arrange(desc(year_added)) %>%
+  distinct(title, .keep_all = TRUE) %>%
+  slice_head(n = 10)
+
+print("Top 10 recent thrillers (since 2016):")
+print(thrillers_recent)
+
+# 10. --- save small CSV summaries ---
+top_genres %>% rename(genre = listed_in) %>% write_csv("top_genres_summary.csv")
+top_countries %>% write_csv("top_countries_summary.csv")
+
+message("Analysis finished. Plots saved as PNG and summaries as CSV in current folder.")
